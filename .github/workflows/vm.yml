@@ -1,25 +1,58 @@
-name: Run QEMU VM in Actions
+name: Ubuntu VM with QEMU and root login
 
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
 
 jobs:
-  run-vm:
+  vm:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Install QEMU
+      run: sudo apt update && sudo apt install -y qemu-system-x86 cloud-image-utils genisoimage
 
-      - name: Install QEMU
-        run: sudo apt update && sudo apt install -y qemu-system-x86
+    - name: Download Ubuntu Cloud Image
+      run: |
+        wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O ubuntu.img
 
-      - name: Download Mini ISO
-        run: wget https://releases.ubuntu.com/22.04/ubuntu-22.04.4-live-server-amd64.iso -O ubuntu.iso
+    - name: Create cloud-init seed ISO with root login
+      run: |
+        mkdir -p seed
+        cat > seed/meta-data <<EOF
+        instance-id: ubuntu-vm
+        local-hostname: ubuntu-vm
+        EOF
 
-      - name: Create Disk
-        run: qemu-img create -f qcow2 ubuntu.qcow2 4G
+        cat > seed/user-data <<EOF
+        #cloud-config
+        users:
+          - name: root
+            plain_text_passwd: 'root'
+            lock_passwd: false
+            shell: /bin/bash
+            sudo: ALL=(ALL) NOPASSWD:ALL
+        disable_root: false
+        ssh_pwauth: true
+        chpasswd:
+          expire: false
+        EOF
 
-      - name: Boot VM
-        run: |
-          qemu-system-x86_64 -m 10240 -hda ubuntu.qcow2 \
-            -cdrom mini.iso -boot d \
-            -nographic -net user -net nic
+        cloud-localds seed.iso seed/user-data seed/meta-data
+
+    - name: Start VM
+      run: |
+        qemu-system-x86_64 \
+          -m 16000 \
+          -smp 4 \
+          -drive file=ubuntu.img,format=qcow2 \
+          -cdrom seed.iso \
+          -nographic \
+          -net user,hostfwd=tcp::2222-:22 -net nic \
+          -enable-kvm &
+
+        echo "Waiting 60s for VM to boot..."
+        sleep 60
+
+    - name: Connect via SSH (root/root)
+      run: |
+        sudo apt install -y sshpass
+        sshpass -p root ssh -o StrictHostKeyChecking=no -p 2222 root@localhost "echo '✅ Root Login Successful'; uname -a"
