@@ -1,58 +1,37 @@
-name: Ubuntu VM with QEMU and root login
+name: Persistent VM with Dockerfile
 
 on:
   workflow_dispatch:
 
 jobs:
-  vm:
+  run-vm:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Install QEMU
-      run: sudo apt update && sudo apt install -y qemu-system-x86 cloud-image-utils genisoimage
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-    - name: Download Ubuntu Cloud Image
+    - name: Download disk if exists
+      uses: actions/download-artifact@v4
+      with:
+        name: vm-disk
+      continue-on-error: true
+
+    - name: docker run --privileged -p 6080:6080 -p 2221:2222 -v $PWD/vmdata:/data arindamvm/githubvm
+      run: docker run --privileged -p 6080:6080 -p 2221:2222 -v $PWD/vmdata:/data arindamvm/githubvm
+
+    - name: Create disk if not exists
       run: |
-        wget https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img -O ubuntu.img
+        if [ ! -f disk.img ]; then
+          qemu-img create -f qcow2 disk.img 400G
+        fi
 
-    - name: Create cloud-init seed ISO with root login
+    - name: Run VM container with mounted disk
       run: |
-        mkdir -p seed
-        cat > seed/meta-data <<EOF
-        instance-id: ubuntu-vm
-        local-hostname: ubuntu-vm
-        EOF
+        docker run --rm -v $PWD/disk.img:/data/disk.img my-vm
 
-        cat > seed/user-data <<EOF
-        #cloud-config
-        users:
-          - name: root
-            plain_text_passwd: 'root'
-            lock_passwd: false
-            shell: /bin/bash
-            sudo: ALL=(ALL) NOPASSWD:ALL
-        disable_root: false
-        ssh_pwauth: true
-        chpasswd:
-          expire: false
-        EOF
-
-        cloud-localds seed.iso seed/user-data seed/meta-data
-
-    - name: Start VM
-      run: |
-        qemu-system-x86_64 \
-          -m 16000 \
-          -smp 4 \
-          -drive file=ubuntu.img,format=qcow2 \
-          -cdrom seed.iso \
-          -nographic \
-          -net user,hostfwd=tcp::2222-:22 -net nic \
-          -enable-kvm &
-
-        echo "Waiting 60s for VM to boot..."
-        sleep 60
-
-    - name: Connect via SSH (root/root)
-      run: |
-        sudo apt install -y sshpass
-        sshpass -p root ssh -o StrictHostKeyChecking=no -p 2222 root@localhost "echo '✅ Root Login Successful'; uname -a"
+    - name: Upload disk after run (persist data)
+      uses: actions/upload-artifact@v4
+      with:
+        name: vm-disk
+        path: disk.img
