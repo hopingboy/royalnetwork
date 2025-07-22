@@ -1,0 +1,25 @@
+name: Run QEMU VM in Actions
+
+on: [workflow_dispatch]
+
+jobs:
+  run-vm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install QEMU
+        run: sudo apt update && sudo apt install -y qemu-system-x86
+
+      - name: Download Mini ISO
+        run: wget https://cdimage.ubuntu.com/netboot/ubuntu-20.04/amd64/mini.iso -O mini.iso
+
+      - name: Create Disk
+        run: qemu-img create -f qcow2 ubuntu.qcow2 4G
+
+      - name: Boot VM
+        run: |
+          qemu-system-x86_64 -m 2048 -hda ubuntu.qcow2 \
+            -cdrom mini.iso -boot d \
+            -nographic -net user -net nic
